@@ -96,10 +96,10 @@ class PS3EdatDecryptor:
                 data = f.read()
         except Exception as e:
             print(f"[*] Error reading: {e}")
-            return None
+            return None, None
 
         if len(data) < 4 or not data.startswith(b'NPD'):
-            return self.extract_png_from_buffer(data)
+            return self.extract_png_from_buffer(data), None
 
         version = struct.unpack(">I", data[4:8])[0]
         license_type = struct.unpack(">I", data[8:12])[0]
@@ -196,8 +196,8 @@ class PS3EdatDecryptor:
                 png_data.extend(dec_block)
 
         if png_data:
-            return self.extract_png_from_buffer(bytes(png_data))
-        return None
+            return self.extract_png_from_buffer(bytes(png_data)), content_id
+        return None, content_id
 
     def extract_png_from_buffer(self, buffer):
         if buffer.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -233,11 +233,14 @@ class AvatarApp:
                 cfg = json.load(f)
                 if 'extract_path' not in cfg:
                     cfg['extract_path'] = self.default_extract_path
+                if 'naming_mode' not in cfg:
+                    cfg['naming_mode'] = 0
                 return cfg
         return {
             "avatar_path": self.default_avatar_path,
             "exdata_path": "",
-            "extract_path": self.default_extract_path
+            "extract_path": self.default_extract_path,
+            "naming_mode": 0
         }
 
     def save_config(self):
@@ -246,6 +249,9 @@ class AvatarApp:
 
     def sanitize_path(self, path):
         return path.strip().strip("'\"")
+
+    def clear_terminal(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
 
     def load_rap_keys(self):
         path = self.config.get("exdata_path")
@@ -263,6 +269,11 @@ class AvatarApp:
                         print(f"    Error loading {file}: {e}")
             print(f"[*] Loaded {count} RAP files.")
 
+    def get_png_name(self, original_filename, content_id):
+        if self.config.get('naming_mode') == 1 and content_id:
+            return content_id + ".png"
+        return original_filename.rsplit('.', 1)[0] + ".png"
+
     def process_all(self):
         root = self.config.get("avatar_path")
         out_root = self.config.get("extract_path")
@@ -270,6 +281,7 @@ class AvatarApp:
             print(f"[*] Path not found: {root}")
             return
 
+        self.clear_terminal()
         success_count = 0
         fail_count = 0
 
@@ -277,9 +289,9 @@ class AvatarApp:
             for f in files:
                 if f.lower().endswith(('.edat', '.unedat')):
                     file_path = os.path.join(r, f)
-                    print(f"\n[*] Processing: {file_path}")
+                    print(f"[*] Processing: {file_path}")
 
-                    png_data = PS3EdatDecryptor(file_path, self.available_klics).decrypt_to_png()
+                    png_data, content_id = PS3EdatDecryptor(file_path, self.available_klics).decrypt_to_png()
 
                     if png_data:
                         subfolder_name = os.path.basename(r)
@@ -288,7 +300,7 @@ class AvatarApp:
                         if not os.path.exists(target_dir):
                             os.makedirs(target_dir)
 
-                        png_name = f.rsplit('.', 1)[0] + ".png"
+                        png_name = self.get_png_name(f, content_id)
                         png_path = os.path.join(target_dir, png_name)
 
                         with open(png_path, 'wb') as png_file:
@@ -299,6 +311,7 @@ class AvatarApp:
                         print(f"    No PNG found in {f}")
                         fail_count += 1
         print(f"\n[*] Done! Success: {success_count}, Failed: {fail_count}")
+        input("\nPress Enter to return to menu...")
 
     def choose_and_extract(self):
         root = self.config.get("avatar_path")
@@ -307,9 +320,11 @@ class AvatarApp:
             print(f"[*] Path not found: {root}")
             return
 
+        self.clear_terminal()
         subdirs = sorted([d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))])
         if not subdirs:
             print("[*] No subdirectories found in avatar folder.")
+            input("\nPress Enter...")
             return
 
         for i, d in enumerate(subdirs): print(f"{i}. {d}")
@@ -317,10 +332,13 @@ class AvatarApp:
             f_idx = int(input("\nFolder index: "))
             sel_f = subdirs[f_idx]
             folder_path = os.path.join(root, sel_f)
+            
+            self.clear_terminal()
             files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.edat', '.unedat'))])
 
             if not files:
                 print("[*] No EDAT files in this folder.")
+                input("\nPress Enter...")
                 return
 
             for i, f in enumerate(files): print(f"{i}. {f}")
@@ -328,27 +346,38 @@ class AvatarApp:
             sel_file = files[file_idx]
 
             print(f"\n[*] Processing: {sel_file}")
-            png_data = PS3EdatDecryptor(os.path.join(folder_path, sel_file), self.available_klics).decrypt_to_png()
+            png_data, content_id = PS3EdatDecryptor(os.path.join(folder_path, sel_file), self.available_klics).decrypt_to_png()
             if png_data:
                 target_dir = os.path.join(out_root, sel_f)
                 if not os.path.exists(target_dir):
                     os.makedirs(target_dir)
 
-                png_name = sel_file.rsplit('.', 1)[0] + ".png"
+                png_name = self.get_png_name(sel_file, content_id)
                 png_path = os.path.join(target_dir, png_name)
                 with open(png_path, 'wb') as png_file: png_file.write(png_data)
                 print(f"    Saved PNG to: {png_path}")
             else: print(f"    No PNG found")
         except Exception as e: print(f"[*] Error: {e}")
+        input("\nPress Enter to return to menu...")
 
     def change_paths_menu(self):
         while True:
-            print("\n" + "-"*30)
-            print("1. Change psn_avatar path")
-            print("2. Change exdata path")
-            print("3. Change extract path")
+            self.clear_terminal()
+            mode_str = "Content ID" if self.config.get('naming_mode') == 1 else "Filename"
+
+            av_path = self.config.get('avatar_path', 'Not set')
+            ex_path = self.config.get('exdata_path', 'Not set')
+            et_path = self.config.get('extract_path', 'Not set')
+
+            print("=" * 50)
+            print("      PS3 Avatar Tool by FlexBy")
+            print("=" * 50)
+            print(f"1. Change psn_avatar path (Current: {av_path})")
+            print(f"2. Change exdata path (Current: {ex_path})")
+            print(f"3. Change extract path (Current: {et_path})")
+            print(f"4. Change naming mode (Current: {mode_str})")
             print("0. Back")
-            print("-"*30)
+            print("=" * 50)
             sub_c = input("\nChoice: ").strip()
 
             if sub_c == '1':
@@ -367,25 +396,35 @@ class AvatarApp:
                 if path:
                     self.config['extract_path'] = path
                     self.save_config()
+            elif sub_c == '4':
+                print("\n0. Use original filename")
+                print("1. Use Content ID (e.g. JP0036-NPJB00609_00-AVATAR1404RAYEN0)")
+                n_choice = input("Choice: ").strip()
+                if n_choice in ['0', '1']:
+                    self.config['naming_mode'] = int(n_choice)
+                    self.save_config()
             elif sub_c == '0':
                 break
 
     def menu(self):
         self.load_rap_keys()
         while True:
-            print("\n" + "="*50)
-            print(f"1. Change paths")
-            print("2. Choose avatar to extract")
-            print("3. Extract all from avatar folder")
+            self.clear_terminal()
+            print("=" * 50)
+            print("      PS3 Avatar Tool by FlexBy")
+            print("=" * 50)
+            print("1. Choose avatar to extract")
+            print("2. Extract all from avatar folder")
+            print("3. Settings")
             print("0. Exit")
-            print("="*50)
+            print("=" * 50)
             c = input("\nChoice: ").strip()
 
-            if c == '1':
+            if c == '3':
                 self.change_paths_menu()
-            elif c == '2':
+            elif c == '1':
                 self.choose_and_extract()
-            elif c == '3':
+            elif c == '2':
                 self.process_all()
             elif c == '0':
                 break
